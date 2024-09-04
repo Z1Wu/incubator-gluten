@@ -150,14 +150,28 @@ object PullOutPreProject extends RewriteSingleNode with PullOutProjectHelper {
 
     case agg: BaseAggregateExec if supportedAggregate(agg) && needsPreProject(agg) =>
       val expressionMap = new mutable.HashMap[Expression, NamedExpression]()
+      def _check_expr(expr: Option[Expression], attrSet: AttributeSet) = {
+        expr.isEmpty || expr.get.references.subsetOf(attrSet)
+      }
       // Handle groupingExpressions.
       val newGroupingExpressions =
-        agg.groupingExpressions.toIndexedSeq.map(
-          replaceExpressionWithAttribute(_, expressionMap).asInstanceOf[NamedExpression])
+        agg.groupingExpressions.toIndexedSeq
+          .map {
+            case e: NamedExpression if !_check_expr(Some(e), agg.child.outputSet) => e
+            case e: NamedExpression =>
+              replaceExpressionWithAttribute(e, expressionMap).asInstanceOf[NamedExpression]
+          }
 
       // Handle aggregateExpressions.
       val newAggregateExpressions =
-        agg.aggregateExpressions.toIndexedSeq.map(rewriteAggregateExpression(_, expressionMap))
+        agg.aggregateExpressions.toIndexedSeq
+          .map {
+            case e: AggregateExpression
+                if !_check_expr(Some(e.aggregateFunction), agg.child.outputSet) ||
+                  !_check_expr(e.filter, agg.child.outputSet) =>
+              e
+            case e: AggregateExpression => rewriteAggregateExpression(e, expressionMap)
+          }
 
       val newAgg = copyBaseAggregateExec(agg)(
         newGroupingExpressions = newGroupingExpressions,
